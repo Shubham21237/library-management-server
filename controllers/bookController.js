@@ -112,7 +112,7 @@ export const createBook = async (req, res) => {
     // 2. Generate QR Code Data URL for instant webcam scanning
     const qrCodeDataUrl = await QRCode.toDataURL(isbn);
 
-    // 3. Handle Cover Image URL (Uploaded via Multer/Cloudinary or passed as URL string)
+    // 3. Handle Cover Image URL
     let coverImage = {
       url: 'https://images.unsplash.com/photo-1543002588-bfa74002ed7e?auto=format&fit=crop&w=400&q=80',
       publicId: ''
@@ -167,14 +167,12 @@ export const updateBook = async (req, res) => {
 
     const { totalCopies } = req.body;
 
-    // Adjust available copies if totalCopies changes
     if (totalCopies !== undefined) {
       const copiesDifference = Number(totalCopies) - book.totalCopies;
       book.availableCopies = Math.max(0, book.availableCopies + copiesDifference);
       book.totalCopies = Number(totalCopies);
     }
 
-    // Update other fields
     Object.assign(book, req.body);
 
     if (req.file && req.file.path) {
@@ -211,7 +209,7 @@ export const deleteBook = async (req, res) => {
 };
 
 /**
- * @desc    Feature #1: Auto-Fetch Metadata from Google Books API by ISBN / Title
+ * @desc    Feature #1: Auto-Fetch Metadata with Google Books API + Open Library Fallback
  * @route   GET /api/books/fetch-external
  * @access  Public / Admin
  */
@@ -226,39 +224,67 @@ export const fetchBookFromGoogle = async (req, res) => {
       });
     }
 
-    const searchQuery = isbn ? `isbn:${isbn}` : query;
-    const googleApiUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchQuery)}&maxResults=1`;
+    const cleanedIsbn = (isbn || '').trim().replace(/[^0-9X]/gi, '');
 
-    const response = await axios.get(googleApiUrl);
+    // 1. Try Google Books API First
+    try {
+      const searchQuery = cleanedIsbn ? `isbn:${cleanedIsbn}` : query;
+      const googleApiUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchQuery)}&maxResults=1`;
+      const googleRes = await axios.get(googleApiUrl);
 
-    if (!response.data.items || response.data.items.length === 0) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No matching book found on Google Books API.'
-      });
+      if (googleRes.data.items && googleRes.data.items.length > 0) {
+        const bookInfo = googleRes.data.items[0].volumeInfo;
+        return res.status(200).json({
+          status: 'success',
+          source: 'Google Books API',
+          data: {
+            title: bookInfo.title || '',
+            author: bookInfo.authors ? bookInfo.authors.join(', ') : 'Unknown Author',
+            publisher: bookInfo.publisher || 'Unknown Publisher',
+            publishedDate: bookInfo.publishedDate || '',
+            description: bookInfo.description || '',
+            pageCount: bookInfo.pageCount || 0,
+            isbn: cleanedIsbn || (bookInfo.industryIdentifiers ? bookInfo.industryIdentifiers[0]?.identifier : ''),
+            coverImageUrl: bookInfo.imageLinks?.thumbnail?.replace('http:', 'https:') || bookInfo.imageLinks?.smallThumbnail?.replace('http:', 'https:') || '',
+            categories: bookInfo.categories || []
+          }
+        });
+      }
+    } catch (gErr) {
+      console.warn('⚠️ Google Books API skipped or rate limited. Falling back to Open Library API...');
     }
 
-    const bookInfo = response.data.items[0].volumeInfo;
+    // 2. Open Library API Fallback (Unlimited Free Access)
+    if (cleanedIsbn) {
+      const openLibUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${cleanedIsbn}&format=json&jscmd=data`;
+      const openLibRes = await axios.get(openLibUrl);
+      const bookData = openLibRes.data[`ISBN:${cleanedIsbn}`];
 
-    // Standardize extracted book metadata
-    const extractedData = {
-      title: bookInfo.title || '',
-      author: bookInfo.authors ? bookInfo.authors.join(', ') : 'Unknown Author',
-      publisher: bookInfo.publisher || 'Unknown Publisher',
-      publishedDate: bookInfo.publishedDate || '',
-      description: bookInfo.description || '',
-      pageCount: bookInfo.pageCount || 0,
-      isbn: isbn || (bookInfo.industryIdentifiers ? bookInfo.industryIdentifiers[0]?.identifier : ''),
-      coverImageUrl: bookInfo.imageLinks?.thumbnail?.replace('http:', 'https:') || bookInfo.imageLinks?.smallThumbnail?.replace('http:', 'https:') || '',
-      categories: bookInfo.categories || []
-    };
+      if (bookData) {
+        return res.status(200).json({
+          status: 'success',
+          source: 'Open Library API',
+          data: {
+            title: bookData.title || '',
+            author: bookData.authors ? bookData.authors.map(a => a.name).join(', ') : 'Unknown Author',
+            publisher: bookData.publishers ? bookData.publishers[0]?.name : 'Unknown Publisher',
+            publishedDate: bookData.publish_date || '',
+            description: bookData.notes || (bookData.subjects ? `Subjects: ${bookData.subjects.slice(0, 5).map(s => s.name).join(', ')}` : ''),
+            pageCount: bookData.number_of_pages || 0,
+            isbn: cleanedIsbn,
+            coverImageUrl: bookData.cover?.large || bookData.cover?.medium || bookData.cover?.small || '',
+            categories: bookData.subjects ? bookData.subjects.slice(0, 3).map(s => s.name) : []
+          }
+        });
+      }
+    }
 
-    res.status(200).json({
-      status: 'success',
-      data: extractedData
+    return res.status(404).json({
+      status: 'fail',
+      message: 'No matching book found on Google Books or Open Library catalog.'
     });
   } catch (error) {
-    console.error('❌ Google Books API Error:', error.message);
-    res.status(500).json({ status: 'error', message: 'Failed to fetch book data from Google Books API.' });
+    console.error('❌ External Book API Error:', error.message);
+    res.status(500).json({ status: 'error', message: 'Failed to fetch book data from external APIs.' });
   }
 };
