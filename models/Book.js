@@ -1,5 +1,37 @@
 import mongoose from 'mongoose';
 
+const reviewSchema = new mongoose.Schema(
+  {
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    userName: {
+      type: String,
+      required: true
+    },
+    userAvatar: {
+      type: String,
+      default: ''
+    },
+    rating: {
+      type: Number,
+      required: true,
+      min: 1,
+      max: 5
+    },
+    comment: {
+      type: String,
+      required: true,
+      trim: true
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
 const bookSchema = new mongoose.Schema(
   {
     title: {
@@ -62,6 +94,21 @@ const bookSchema = new mongoose.Schema(
         type: String,
         default: ''
       }
+    },
+    // PDF E-Book Download Link
+    pdfUrl: {
+      type: String,
+      default: ''
+    },
+    // Reviews & Community Star Ratings
+    reviews: [reviewSchema],
+    averageRating: {
+      type: Number,
+      default: 0
+    },
+    numReviews: {
+      type: Number,
+      default: 0
     },
     // Smart Waiting Queue for Out-of-Stock books
     reservationQueue: [

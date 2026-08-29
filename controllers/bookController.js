@@ -97,7 +97,8 @@ export const createBook = async (req, res) => {
       pageCount,
       totalCopies,
       shelfLocation,
-      coverImageUrl
+      coverImageUrl,
+      pdfUrl
     } = req.body;
 
     // 1. Check if ISBN already exists
@@ -139,6 +140,7 @@ export const createBook = async (req, res) => {
       availableCopies: Number(totalCopies),
       shelfLocation,
       coverImage,
+      pdfUrl: pdfUrl || '',
       qrCodeUrl: qrCodeDataUrl
     });
 
@@ -165,12 +167,16 @@ export const updateBook = async (req, res) => {
       return res.status(404).json({ status: 'fail', message: 'Book not found.' });
     }
 
-    const { totalCopies } = req.body;
+    const { totalCopies, pdfUrl } = req.body;
 
     if (totalCopies !== undefined) {
       const copiesDifference = Number(totalCopies) - book.totalCopies;
       book.availableCopies = Math.max(0, book.availableCopies + copiesDifference);
       book.totalCopies = Number(totalCopies);
+    }
+
+    if (pdfUrl !== undefined) {
+      book.pdfUrl = pdfUrl;
     }
 
     Object.assign(book, req.body);
@@ -286,5 +292,61 @@ export const fetchBookFromGoogle = async (req, res) => {
   } catch (error) {
     console.error('❌ External Book API Error:', error.message);
     res.status(500).json({ status: 'error', message: 'Failed to fetch book data from external APIs.' });
+  }
+};
+
+/**
+ * @desc    Add or Update Book Review & Star Rating
+ * @route   POST /api/books/:id/reviews
+ * @access  Private
+ */
+export const addBookReview = async (req, res) => {
+  try {
+    const { rating, comment } = req.body;
+    const book = await Book.findById(req.params.id);
+
+    if (!book) {
+      return res.status(404).json({ status: 'fail', message: 'Book not found.' });
+    }
+
+    if (!rating || !comment) {
+      return res.status(400).json({ status: 'fail', message: 'Please provide both rating (1-5) and comment.' });
+    }
+
+    // Check if user already submitted a review
+    const alreadyReviewed = book.reviews.find(
+      r => r.user.toString() === req.user._id.toString()
+    );
+
+    if (alreadyReviewed) {
+      alreadyReviewed.rating = Number(rating);
+      alreadyReviewed.comment = comment;
+      alreadyReviewed.userName = req.user.name;
+      alreadyReviewed.userAvatar = req.user.avatar || '';
+    } else {
+      const review = {
+        user: req.user._id,
+        userName: req.user.name,
+        userAvatar: req.user.avatar || '',
+        rating: Number(rating),
+        comment
+      };
+      book.reviews.push(review);
+    }
+
+    book.numReviews = book.reviews.length;
+    book.averageRating =
+      book.reviews.reduce((acc, item) => item.rating + acc, 0) / book.reviews.length;
+
+    await book.save();
+    const updatedBook = await Book.findById(book._id).populate('category', 'name icon');
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Review submitted successfully!',
+      data: updatedBook
+    });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
   }
 };
