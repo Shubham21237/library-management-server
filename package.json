@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "seed": "node scripts/seedData.js",
+    "seed:destroy": "node scripts/seedData.js -d"
   },
   "dependencies": {
     "@google/genai": "^2.18.0",
